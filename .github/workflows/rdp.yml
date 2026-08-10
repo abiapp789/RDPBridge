@@ -21,10 +21,16 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: Install FreeRDP & Virtual Framebuffer
+      - name: Add Tailscale Repository & Install Packages
         run: |
+          # 1. Add Tailscale GPG Key & Repo
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+
+          # 2. Update APT and install packages (FreeRDP 3 / FreeRDP 2 fallback, Xvfb, Tailscale)
           sudo apt-get update
-          sudo apt-get install -y freerdp2-x11 xvfb tailscale
+          sudo apt-get install -y freerdp3-x11 || sudo apt-get install -y freerdp2-x11
+          sudo apt-get install -y xvfb tailscale
 
       - name: Authenticate Tailscale
         run: |
@@ -32,7 +38,6 @@ jobs:
 
       - name: Resolve IP & Credentials
         run: |
-          # Handle inputs from both Webhook (client_payload) and Manual Dispatch
           TARGET_IP="${{ github.event.client_payload.ip || inputs.ip }}"
           TARGET_USER="${{ github.event.client_payload.username || inputs.username }}"
           TARGET_PASS="${{ github.event.client_payload.password || inputs.password }}"
@@ -41,21 +46,18 @@ jobs:
           echo "TARGET_USER=$TARGET_USER" >> $GITHUB_ENV
           echo "TARGET_PASS=$TARGET_PASS" >> $GITHUB_ENV
 
-          # Mask sensitive credentials in GitHub logs
           echo "::add-mask::$TARGET_PASS"
 
       - name: Run Persistent RDP Session inside XVFB
         run: |
           echo "Connecting headless RDP session to $TARGET_IP..."
 
-          # 1. Start Virtual X Server (Virtual Display :99)
+          # Start Virtual X Server
           Xvfb :99 -screen 0 1920x1080x24 &
           export DISPLAY=:99
           sleep 2
 
-          # 2. Launch FreeRDP session in background to hold active render stream
-          # /cert-ignore ignores untrusted SSL certs
-          # +gfx-h264 /network:auto enables active GPU rendering
+          # Launch FreeRDP session in background
           xfreerdp /v:"$TARGET_IP" \
                    /u:"$TARGET_USER" \
                    /p:"$TARGET_PASS" \
@@ -68,7 +70,7 @@ jobs:
           RDP_PID=$!
           echo "RDP Client running under PID: $RDP_PID"
 
-          # 3. Monitor Process: If local PC reconnects or session drops, exit workflow gracefully
+          # Monitor Process: loop until disconnect
           while kill -0 $RDP_PID 2>/dev/null; do
             echo "[$(date)] Linux Bridge actively maintaining GUI session on $TARGET_IP..."
             sleep 15
