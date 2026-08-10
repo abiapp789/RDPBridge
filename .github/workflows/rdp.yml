@@ -27,9 +27,9 @@ jobs:
           curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
           curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
 
-          # 2. Install Tailscale, Xvfb, and FreeRDP packages
+          # 2. Install Tailscale, Xvfb, and FreeRDP
           sudo apt-get update
-          sudo apt-get install -y tailscale xvfb freerdp2-x11 freerdp2-dev || sudo apt-get install -y freerdp3-x11
+          sudo apt-get install -y tailscale xvfb freerdp2-x11
 
       - name: Authenticate Tailscale
         run: |
@@ -56,36 +56,23 @@ jobs:
           export DISPLAY=:99
           sleep 2
 
-          # 2. Determine available FreeRDP binary executable
-          if command -v xfreerdp &> /dev/null; then
-            RDP_BIN="xfreerdp"
-          elif command -v freerdp3 &> /dev/null; then
-            RDP_BIN="freerdp3"
-          elif command -v freerdp &> /dev/null; then
-            RDP_BIN="freerdp"
-          else
-            echo "Error: No FreeRDP binary found!"
-            exit 1
-          fi
-
-          echo "Using RDP Binary: $RDP_BIN"
-
-          # 3. Launch FreeRDP session in background
-          $RDP_BIN /v:"$TARGET_IP" \
+          # 2. Launch FreeRDP session in background with compatible flags
+          xfreerdp /v:"$TARGET_IP" \
                    /u:"$TARGET_USER" \
                    /p:"$TARGET_PASS" \
                    /size:1920x1080 \
                    /cert-ignore \
-                   +gfx-h264 \
+                   /cert:ignore \
+                   /gfx \
                    /network:auto &
           
           RDP_PID=$!
           echo "RDP Client running under PID: $RDP_PID"
 
-          # Allow process a moment to initialize
-          sleep 3
+          # Give process a moment to establish connection
+          sleep 5
 
-          # 4. Monitor loop
+          # 3. Monitor loop: Keep active as long as RDP session remains alive
           while kill -0 $RDP_PID 2>/dev/null; do
             echo "[$(date)] Linux Bridge actively maintaining GUI session on $TARGET_IP..."
             sleep 15
