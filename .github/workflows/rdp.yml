@@ -1,0 +1,77 @@
+name: Linux RDP Bridge KeepAlive
+
+on:
+  repository_dispatch:
+    types: [start-rdp-bridge]
+  workflow_dispatch:
+    inputs:
+      ip:
+        description: 'Target Tailscale IP'
+        required: true
+      username:
+        description: 'Target Windows Username'
+        required: true
+      password:
+        description: 'Target Windows Password'
+        required: true
+
+jobs:
+  rdp-bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Install FreeRDP & Virtual Framebuffer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y freerdp2-x11 xvfb tailscale
+
+      - name: Authenticate Tailscale
+        run: |
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=linux-rdp-bridge
+
+      - name: Resolve IP & Credentials
+        run: |
+          # Handle inputs from both Webhook (client_payload) and Manual Dispatch
+          TARGET_IP="${{ github.event.client_payload.ip || inputs.ip }}"
+          TARGET_USER="${{ github.event.client_payload.username || inputs.username }}"
+          TARGET_PASS="${{ github.event.client_payload.password || inputs.password }}"
+
+          echo "TARGET_IP=$TARGET_IP" >> $GITHUB_ENV
+          echo "TARGET_USER=$TARGET_USER" >> $GITHUB_ENV
+          echo "TARGET_PASS=$TARGET_PASS" >> $GITHUB_ENV
+
+          # Mask sensitive credentials in GitHub logs
+          echo "::add-mask::$TARGET_PASS"
+
+      - name: Run Persistent RDP Session inside XVFB
+        run: |
+          echo "Connecting headless RDP session to $TARGET_IP..."
+
+          # 1. Start Virtual X Server (Virtual Display :99)
+          Xvfb :99 -screen 0 1920x1080x24 &
+          export DISPLAY=:99
+          sleep 2
+
+          # 2. Launch FreeRDP session in background to hold active render stream
+          # /cert-ignore ignores untrusted SSL certs
+          # +gfx-h264 /network:auto enables active GPU rendering
+          xfreerdp /v:"$TARGET_IP" \
+                   /u:"$TARGET_USER" \
+                   /p:"$TARGET_PASS" \
+                   /size:1920x1080 \
+                   /cert-ignore \
+                   +gfx-h264 \
+                   /network:auto \
+                   /sound:sys:alsa &
+          
+          RDP_PID=$!
+          echo "RDP Client running under PID: $RDP_PID"
+
+          # 3. Monitor Process: If local PC reconnects or session drops, exit workflow gracefully
+          while kill -0 $RDP_PID 2>/dev/null; do
+            echo "[$(date)] Linux Bridge actively maintaining GUI session on $TARGET_IP..."
+            sleep 15
+          done
+
+          echo "RDP connection closed or overridden. Terminating action cleanly."
