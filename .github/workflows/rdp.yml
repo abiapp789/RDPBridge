@@ -21,16 +21,15 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: Add Tailscale Repository & Install Packages
+      - name: Add Tailscale Repository & Install Dependencies
         run: |
           # 1. Add Tailscale GPG Key & Repo
           curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
           curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
 
-          # 2. Update APT and install packages (FreeRDP 3 / FreeRDP 2 fallback, Xvfb, Tailscale)
+          # 2. Install Tailscale, Xvfb, and FreeRDP packages
           sudo apt-get update
-          sudo apt-get install -y freerdp3-x11 || sudo apt-get install -y freerdp2-x11
-          sudo apt-get install -y xvfb tailscale
+          sudo apt-get install -y tailscale xvfb freerdp2-x11 freerdp2-dev || sudo apt-get install -y freerdp3-x11
 
       - name: Authenticate Tailscale
         run: |
@@ -52,25 +51,41 @@ jobs:
         run: |
           echo "Connecting headless RDP session to $TARGET_IP..."
 
-          # Start Virtual X Server
+          # 1. Start Virtual X Server
           Xvfb :99 -screen 0 1920x1080x24 &
           export DISPLAY=:99
           sleep 2
 
-          # Launch FreeRDP session in background
-          xfreerdp /v:"$TARGET_IP" \
+          # 2. Determine available FreeRDP binary executable
+          if command -v xfreerdp &> /dev/null; then
+            RDP_BIN="xfreerdp"
+          elif command -v freerdp3 &> /dev/null; then
+            RDP_BIN="freerdp3"
+          elif command -v freerdp &> /dev/null; then
+            RDP_BIN="freerdp"
+          else
+            echo "Error: No FreeRDP binary found!"
+            exit 1
+          fi
+
+          echo "Using RDP Binary: $RDP_BIN"
+
+          # 3. Launch FreeRDP session in background
+          $RDP_BIN /v:"$TARGET_IP" \
                    /u:"$TARGET_USER" \
                    /p:"$TARGET_PASS" \
                    /size:1920x1080 \
                    /cert-ignore \
                    +gfx-h264 \
-                   /network:auto \
-                   /sound:sys:alsa &
+                   /network:auto &
           
           RDP_PID=$!
           echo "RDP Client running under PID: $RDP_PID"
 
-          # Monitor Process: loop until disconnect
+          # Allow process a moment to initialize
+          sleep 3
+
+          # 4. Monitor loop
           while kill -0 $RDP_PID 2>/dev/null; do
             echo "[$(date)] Linux Bridge actively maintaining GUI session on $TARGET_IP..."
             sleep 15
