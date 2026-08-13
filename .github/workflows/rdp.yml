@@ -27,9 +27,9 @@ jobs:
           curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
           curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
 
-          # 2. Install Tailscale, Xvfb, and FreeRDP
+          # 2. Install Tailscale, Xvfb, FreeRDP, and PulseAudio dependencies
           sudo apt-get update
-          sudo apt-get install -y tailscale xvfb freerdp2-x11
+          sudo apt-get install -y tailscale xvfb freerdp2-x11 pulseaudio alsa-utils libasound2-plugins
 
       - name: Authenticate Tailscale
         run: |
@@ -56,7 +56,11 @@ jobs:
           export DISPLAY=:99
           sleep 2
 
-          # 2. Launch FreeRDP session in background with compatible flags
+          # 2. Start Virtual PulseAudio Daemon for Sound Handling
+          pulseaudio --start --exit-idle-time=-1
+          sleep 1
+
+          # 3. Launch FreeRDP session with sound redirection
           xfreerdp /v:"$TARGET_IP" \
                    /u:"$TARGET_USER" \
                    /p:"$TARGET_PASS" \
@@ -64,17 +68,18 @@ jobs:
                    /cert-ignore \
                    /cert:ignore \
                    /gfx \
-                   /network:auto &
-          
+                   /network:auto \
+                   /sound:sys:pulse &
+
           RDP_PID=$!
           echo "RDP Client running under PID: $RDP_PID"
 
           # Give process a moment to establish connection
           sleep 5
 
-          # 3. Monitor loop: Keep active as long as RDP session remains alive
+          # 4. Monitor loop: Keep active as long as RDP session remains alive
           while kill -0 $RDP_PID 2>/dev/null; do
-            echo "[$(date)] Linux Bridge actively maintaining GUI session on $TARGET_IP..."
+            echo "[$(date)] Linux Bridge actively maintaining GUI & Audio session on $TARGET_IP..."
             sleep 15
           done
 
